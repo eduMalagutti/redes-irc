@@ -1,29 +1,73 @@
 #!/usr/bin/env python3
 import asyncio
-from tcp import Servidor
 import re
+from tcp import Servidor, Conexao
 
 
-def validar_nome(nome):
-    return re.match(br'^[a-zA-Z][a-zA-Z0-9_-]*$', nome) is not None
+class Utils:
+    def validar_nome(nome: bytes) -> bool:
+        return re.match(br'^[a-zA-Z][a-zA-Z0-9_-]*$', nome) is not None
 
 
-def sair(conexao):
-    print(conexao, 'conexão fechada')
-    conexao.fechar()
+class Handler:
+    def handle_ping(conexao: Conexao, linha: bytes):
+        """
+        Trata PING <token> → envia PONG :<token>.
+        ```
+        PING abc123
+        → :server PONG server :abc123
+        ```
+        """
+        parts = linha.split(b' ', 1)
+        token = parts[1] if len(parts) > 1 else b''
+        token = token.lstrip(b':')
+        resposta = b':server PONG server :' + token + b'\r\n'
+        conexao.enviar(resposta)
+
+    # Exemplo futuro de handler de NICK:
+    def handle_nick(conexao, linha: bytes, state):
+        # state seria um dict de contexto (apelidos em uso, etc)
+        # parse “NICK xxx”, validar_nome(), enviar 432/433/001+422, etc.
+        ...
+
+    def handle_default(conexao, linha: bytes):
+        """
+        Para qualquer outra linha, apenas imprime.
+        Aqui você pode ampliar para NICK, JOIN, PRIVMSG etc.
+        """
+        print(conexao, linha)
 
 
-def dados_recebidos(conexao, dados):
-    if dados == b'':
-        return sair(conexao)
-    print(conexao, dados)
+class IRCServer:
+    def __init__(self, porta: int = 6667):
+        self.servidor = Servidor(porta)
 
+    def start(self):
+        self.servidor.registrar_monitor_de_conexoes_aceitas(self.conexao_aceita)
+        print(
+            f"[Servidor] Escutando em 0.0.0.0:{self.servidor.s.getsockname()[1]}")
+        asyncio.get_event_loop().run_forever()
 
-def conexao_aceita(conexao):
-    print(conexao, 'nova conexão')
-    conexao.registrar_recebedor(dados_recebidos)
+    def conexao_aceita(self, conexao: Conexao):
+        print(f"[Conexão] {conexao} conectou")
+        conexao.registrar_recebedor(self.dados_recebidos)
 
+    def dados_recebidos(self, conexao: Conexao, dados: bytes):
+        if dados == b'':
+            return self.sair(conexao)
 
-servidor = Servidor(6667)
-servidor.registrar_monitor_de_conexoes_aceitas(conexao_aceita)
-asyncio.get_event_loop().run_forever()
+        linhas = dados.split(b'\r\n')
+        for linha in linhas:
+            if not linha:
+                continue
+            if linha.upper().startswith(b'PING'):
+                Handler.handle_ping(conexao, linha)
+            else:
+                Handler.handle_default(conexao, linha)
+
+    def sair(self, conexao: Conexao):
+        print(f"[Desconexão] {conexao} fechou")
+        conexao.fechar()
+
+if __name__ == "__main__":
+    IRCServer(porta=6667).start()
