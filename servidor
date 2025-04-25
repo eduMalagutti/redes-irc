@@ -41,6 +41,7 @@ class Handler:
 class IRCServer:
     def __init__(self, porta: int = 6667):
         self.servidor = Servidor(porta)
+        self.handler = Handler()
 
     def start(self):
         self.servidor.registrar_monitor_de_conexoes_aceitas(self.conexao_aceita)
@@ -61,9 +62,9 @@ class IRCServer:
             if not linha:
                 continue
             if linha.upper().startswith(b'PING'):
-                Handler.handle_ping(conexao, linha)
+                self.handler.handle_ping(conexao, linha)
             else:
-                Handler.handle_default(conexao, linha)
+                self.handler.handle_default(conexao, linha)
 
     def sair(self, conexao: Conexao):
         print(f"[Desconexão] {conexao} fechou")
