@@ -29,11 +29,8 @@ class Handler:
         resposta = b':server PONG server :' + args + b'\r\n'
         conexao.enviar(resposta)
 
-    # Exemplo futuro de handler de NICK:
     def handle_nick(conexao, linha: bytes):
-        parts = linha.split(b' ', 1)
-        token = parts[1] if len(parts) > 1 else b''
-        token = token.lstrip(b':')
+        token = Utils.parse_cmd(linha, 'nick')
         if not Utils.validar_nome(token):
             resposta = b':server 432 ' + (conexao.apelido if conexao.apelido != b'' else b'*') + b' ' + token + b' :Erroneous nickname' + b'\r\n'
             conexao.enviar(resposta)
