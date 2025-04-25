@@ -11,9 +11,9 @@ class Servidor:
     def registrar_monitor_de_conexoes_aceitas(self, callback):
         asyncio.get_event_loop().add_reader(self.s, lambda: callback(Conexao(self.s.accept())))
 
-
 class Conexao:
     def __init__(self, accept_tuple):
+        self.mensagem = b''
         self.s, _ = accept_tuple
 
     def registrar_recebedor(self, callback):

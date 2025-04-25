@@ -2,7 +2,7 @@
 import asyncio
 import re
 from tcp import Servidor, Conexao
-
+import time
 
 class Utils:
     def validar_nome(nome: bytes) -> bool:
@@ -11,13 +11,6 @@ class Utils:
 
 class Handler:
     def handle_ping(conexao: Conexao, linha: bytes):
-        """
-        Trata PING <token> → envia PONG :<token>.
-        ```
-        PING abc123
-        → :server PONG server :abc123
-        ```
-        """
         parts = linha.split(b' ', 1)
         token = parts[1] if len(parts) > 1 else b''
         token = token.lstrip(b':')
@@ -31,12 +24,7 @@ class Handler:
         ...
 
     def handle_default(conexao, linha: bytes):
-        """
-        Para qualquer outra linha, apenas imprime.
-        Aqui você pode ampliar para NICK, JOIN, PRIVMSG etc.
-        """
         print(conexao, linha)
-
 
 class IRCServer:
     def __init__(self, porta: int = 6667):
@@ -56,8 +44,11 @@ class IRCServer:
         if dados == b'':
             return self.sair(conexao)
 
-        linhas = dados.split(b'\r\n')
-        for linha in linhas:
+        conexao.mensagem += dados
+        linhas = conexao.mensagem.split(b'\r\n')
+        conexao.mensagem = linhas[-1]
+
+        for linha in linhas[:-1]:
             if not linha:
                 continue
             if linha.upper().startswith(b'PING'):
