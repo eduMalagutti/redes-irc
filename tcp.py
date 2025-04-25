@@ -13,7 +13,8 @@ class Servidor:
 
 class Conexao:
     def __init__(self, accept_tuple):
-        self.mensagem = b''
+        self.apelido = b''
+        self.buffer = b''
         self.s, _ = accept_tuple
 
     def registrar_recebedor(self, callback):

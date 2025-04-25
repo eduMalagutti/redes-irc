@@ -2,12 +2,12 @@
 import asyncio
 import re
 from tcp import Servidor, Conexao
-import time
+
+apelidos = dict()
 
 class Utils:
     def validar_nome(nome: bytes) -> bool:
         return re.match(br'^[a-zA-Z][a-zA-Z0-9_-]*$', nome) is not None
-
 
 class Handler:
     def handle_ping(conexao: Conexao, linha: bytes):
@@ -18,10 +18,29 @@ class Handler:
         conexao.enviar(resposta)
 
     # Exemplo futuro de handler de NICK:
-    def handle_nick(conexao, linha: bytes, state):
-        # state seria um dict de contexto (apelidos em uso, etc)
-        # parse “NICK xxx”, validar_nome(), enviar 432/433/001+422, etc.
-        ...
+    def handle_nick(conexao, linha: bytes):
+        parts = linha.split(b' ', 1)
+        token = parts[1] if len(parts) > 1 else b''
+        token = token.lstrip(b':')
+        if not Utils.validar_nome(token):
+            resposta = b':server 432 ' + (conexao.apelido if conexao.apelido != b'' else b'*') + b' ' + token + b' :Erroneous nickname' + b'\r\n'
+            conexao.enviar(resposta)
+        elif token.upper() in apelidos:
+            resposta = b':server 433 ' + (conexao.apelido if conexao.apelido != b'' else b'*') + b' ' + token + b' :Nickname is already in use' + b'\r\n'
+            conexao.enviar(resposta)
+        else:
+            apelidos[token.upper()] = id(conexao)
+            if conexao.apelido == b'':
+                resposta = b':server 001 ' + token + b' :Welcome' + b'\r\n'
+                conexao.enviar(resposta) 
+                # Não entendi se é para enviar só a mensagem de cima ou essa de baixo também
+                # resposta = b':server 422 ' + token + b' :MOTD File is missing' + b'\r\n'
+                # conexao.enviar(resposta)
+            else:
+                del apelidos[conexao.apelido.upper()]
+                resposta = b':' + conexao.apelido + b' NICK ' + token + b'\r\n'
+                conexao.enviar(resposta) 
+            conexao.apelido = token
 
     def handle_default(conexao, linha: bytes):
         print(conexao, linha)
@@ -44,15 +63,17 @@ class IRCServer:
         if dados == b'':
             return self.sair(conexao)
 
-        conexao.mensagem += dados
-        linhas = conexao.mensagem.split(b'\r\n')
-        conexao.mensagem = linhas[-1]
+        conexao.buffer += dados
+        linhas = conexao.buffer.split(b'\r\n')
+        conexao.buffer = linhas[-1]
 
         for linha in linhas[:-1]:
             if not linha:
                 continue
             if linha.upper().startswith(b'PING'):
                 Handler.handle_ping(conexao, linha)
+            elif linha.upper().startswith(b'NICK'):
+                Handler.handle_nick(conexao, linha)
             else:
                 Handler.handle_default(conexao, linha)
 
