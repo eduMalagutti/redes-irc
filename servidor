@@ -143,6 +143,17 @@ class IRCServer:
 
     def sair(self, conexao: Conexao):
         print(f"[Desconexão] {conexao} fechou")
+
+        nick = conexao.apelido or b'*'
+        for key, members in list(canais.items()):
+            if conexao in members:
+                
+                for c in members:
+                    if c != conexao:
+                        c.enviar(b':' + nick + b' QUIT :Client Quit\r\n')
+                
+                members.remove(conexao)
+        
         conexao.fechar()
 
 if __name__ == "__main__":
