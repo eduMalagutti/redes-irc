@@ -3,34 +3,30 @@ import asyncio
 import re
 from tcp import Servidor, Conexao
 
-apelidos = dict()
+apelidos: dict[str, Conexao] = {}
+canais: dict[str, list[Conexao]] = {}
 
 class Utils:
     def validar_nome(nome: bytes) -> bool:
         return re.match(br'^[a-zA-Z][a-zA-Z0-9_-]*$', nome) is not None
 
-    def parse_cmd(linha: bytes, handler: str):
+    def parse_cmd(linha: bytes):
         # separa o comando dos argumentos
         _, *rest = linha.split(b' ', 1)
-        args = rest[0] if rest else b''
-
-        match handler:
-            case 'ping' | 'nick':
-                return args.lstrip(b':')
-            case 'privmsg':
-                dest, msg = args.split(b' ', 1)
-                return dest, msg.lstrip(b':')
-            case _:
-                return args
+        return rest[0] if rest else b''
 
 class Handler:
     def handle_ping(conexao: Conexao, linha: bytes):
-        args = Utils.parse_cmd(linha, 'ping')
+        args = Utils.parse_cmd(linha)
+        args = args.lstrip(b':')
+
         resposta = b':server PONG server :' + args + b'\r\n'
         conexao.enviar(resposta)
 
     def handle_nick(conexao, linha: bytes):
-        token = Utils.parse_cmd(linha, 'nick')
+        token = Utils.parse_cmd(linha)
+        token = token.lstrip(b':')
+
         if not Utils.validar_nome(token):
             resposta = b':server 432 ' + (conexao.apelido if conexao.apelido != b'' else b'*') + b' ' + token + b' :Erroneous nickname' + b'\r\n'
             conexao.enviar(resposta)
@@ -44,35 +40,77 @@ class Handler:
                     b':server 001 ' + token + b' :Welcome' + b'\r\n' +
                     b':server 422 ' + token + b' :MOTD File is missing' + b'\r\n'
                 )
-                conexao.enviar(resposta) 
+                conexao.enviar(resposta)
             else:
                 del apelidos[conexao.apelido.upper()]
                 resposta = b':' + conexao.apelido + b' NICK ' + token + b'\r\n'
-                conexao.enviar(resposta) 
+                conexao.enviar(resposta)
             conexao.apelido = token
-    
-    def handle_privmsg(conexao: Conexao, linha: bytes):
-        dest, msg = Utils.parse_cmd(linha, 'privmsg')
-        dest_up = dest.upper()
 
-        target = apelidos.get(dest_up)        
+    def handle_privmsg(conexao: Conexao, linha: bytes):
+        args = Utils.parse_cmd(linha)
+        dest, msg = args.split(b' ', 1)
+        msg = msg.lstrip(b':')
+
+        dest_str = dest.decode('utf-8')
+        
+        is_dest_channel = dest_str.startswith('#')
+        dest_str = dest_str.lstrip('#')
+        dest_up = dest_str.upper()
+
         full_msg = (
             b':' + conexao.apelido +
             b' PRIVMSG ' + dest + b' :' +
             msg + b'\r\n'
         )
-        target.enviar(full_msg)
+
+        if is_dest_channel and dest_up in canais:
+            for c in canais[dest_up]:
+                if c == conexao:
+                    continue
+                c.enviar(full_msg)
+        elif dest_up in apelidos:
+            target = apelidos.get(dest_up)
+            target.enviar(full_msg)
+        else:
+            return
+
+    def handle_join(conexao: Conexao, linha: bytes):
+        chan_name = Utils.parse_cmd(linha)
+        chan_name = chan_name.lstrip(b'#')
+        chan_name_str = chan_name.decode('utf-8')
+
+        if not Utils.validar_nome(chan_name):
+            resposta = b':server 403 ' + chan_name + b' :No such channel' + b'\r\n'
+            conexao.enviar(resposta)
+        else:
+            canais.setdefault(chan_name_str.upper(), []).append(conexao)
+            for c in canais[chan_name_str.upper()]:
+                c.enviar(b':' + (conexao.apelido if conexao.apelido != b'' else b'*') + b' JOIN ' + chan_name + b'\r\n')
+
+    def handle_part(conexao: Conexao, linha: bytes):
+        chan_name = Utils.parse_cmd(linha)
+        chan_name = chan_name.lstrip(b'#')
+        chan_name_str = chan_name.decode('utf-8')
+        canais.setdefault(chan_name_str.upper(), []).remove(conexao)
+        
+        conexao.enviar(b':' + (conexao.apelido if conexao.apelido != b'' else b'*') + b' PART ' + chan_name + b'\r\n')
+        for c in canais[chan_name_str.upper()]:
+            c.enviar(b':' + (conexao.apelido if conexao.apelido != b'' else b'*') + b' PART ' + chan_name + b'\r\n')
 
     def handle_default(conexao, linha: bytes):
         print(conexao, linha)
+
 
 class IRCServer:
     def __init__(self, porta: int = 6667):
         self.servidor = Servidor(porta)
 
     def start(self):
-        self.servidor.registrar_monitor_de_conexoes_aceitas(self.conexao_aceita)
-        print(f"[Servidor] Escutando em 0.0.0.0:{self.servidor.s.getsockname()[1]}")
+        self.servidor.registrar_monitor_de_conexoes_aceitas(
+            self.conexao_aceita)
+        print(
+            f"[Servidor] Escutando em 0.0.0.0:{self.servidor.s.getsockname()[1]}")
         asyncio.get_event_loop().run_forever()
 
     def conexao_aceita(self, conexao: Conexao):
@@ -96,6 +134,10 @@ class IRCServer:
                 Handler.handle_nick(conexao, linha)
             elif linha.upper().startswith(b'PRIVMSG'):
                 Handler.handle_privmsg(conexao, linha)
+            elif linha.upper().startswith(b'JOIN'):
+                Handler.handle_join(conexao, linha)
+            elif linha.upper().startswith(b'PART'):
+                Handler.handle_part(conexao, linha)
             else:
                 Handler.handle_default(conexao, linha)
 
