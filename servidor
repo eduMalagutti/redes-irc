@@ -3,7 +3,7 @@ import asyncio
 import re
 from tcp import Servidor, Conexao
 
-apelidos: dict[str, Conexao] = {}
+apelidos: dict[bytes, Conexao] = {}
 canais: dict[str, list[Conexao]] = {}
 
 class Utils:
@@ -47,79 +47,72 @@ class Handler:
                 conexao.enviar(resposta)
             conexao.apelido = token
 
+    def handle_join(conexao: Conexao, linha: bytes):
+        # linha: b'JOIN #canal'
+        chan = Utils.parse_cmd(linha)
+        name = chan.lstrip(b'#')
+        if not Utils.validar_nome(name):
+            conexao.enviar(b':server 403 ' + chan + b' :No such channel\r\n')
+            return
+
+        key = chan.upper()
+        canais.setdefault(key, []).append(conexao)
+
+        for c in canais[key]:
+            c.enviar(b':' + conexao.apelido + b' JOIN :' + chan + b'\r\n')
+
+        nicks = sorted(
+            [c.apelido or b'*' for c in canais[key]],
+            key=lambda x: (x == b'*', x.lower())
+        )
+        prefix = b':server 353 ' + conexao.apelido + b' = ' + chan + b' :'
+        linha_nicks = prefix + b' '.join(nicks)
+        conexao.enviar(linha_nicks + b'\r\n')
+        conexao.enviar(
+            b':server 366 ' + conexao.apelido + b' ' + chan +
+            b' :End of /NAMES list.\r\n'
+        )
+
     def handle_privmsg(conexao: Conexao, linha: bytes):
+        # linha: b'PRIVMSG <dest> :<msg>'
         args = Utils.parse_cmd(linha)
         dest, msg = args.split(b' ', 1)
         msg = msg.lstrip(b':')
 
-        dest_str = dest.decode('utf-8')
-        
-        is_dest_channel = dest_str.startswith('#')
-        dest_str = dest_str.lstrip('#')
-        dest_up = dest_str.upper()
-
-        full_msg = (
+        full = (
             b':' + conexao.apelido +
-            b' PRIVMSG ' + dest + b' :' +
-            msg + b'\r\n'
+            b' PRIVMSG ' + dest + b' :' + msg + b'\r\n'
         )
 
-        if is_dest_channel and dest_up in canais:
-            for c in canais[dest_up]:
-                if c == conexao:
-                    continue
-                c.enviar(full_msg)
-        elif dest_up in apelidos:
-            target = apelidos.get(dest_up)
-            target.enviar(full_msg)
+        if dest.startswith(b'#'):
+            # msg no canal
+            key = dest.upper()
+            if key in canais:
+                for c in canais[key]:
+                    if c is not conexao:
+                        c.enviar(full)
         else:
-            return
+            # msg privada
+            key = dest.upper()              
+            if key in apelidos:
+                apelidos[key].enviar(full)
 
-    def handle_join(conexao: Conexao, linha: bytes):
-        chan_name = Utils.parse_cmd(linha)
-        chan_name = chan_name.lstrip(b'#')
-        chan_name_str = chan_name.decode('utf-8')
-
-        if not Utils.validar_nome(chan_name):
-            resposta = b':server 403 ' + chan_name + b' :No such channel' + b'\r\n'
-            conexao.enviar(resposta)
-        else:
-            canais.setdefault(chan_name_str.upper(), []).append(conexao)
-            for c in canais[chan_name_str.upper()]:
-                c.enviar(b':' + (conexao.apelido if conexao.apelido != b'' else b'*') + b' JOIN ' + chan_name + b'\r\n')
-
-            canal = canais[chan_name_str.upper()]
-            apelidos = sorted([
-                (c.apelido if c.apelido else b'*') for c in canal
-            ], key=lambda x: (x == b'*', x.lower()))
-            prefixo =  b':server 353 ' + (conexao.apelido if conexao.apelido != b'' else b'*') + b' = ' + chan_name + b' :'
-            resposta = prefixo
-            for apelido in apelidos:
-                if len(resposta) + len(apelido) + 1 + len(b'\r\n') > 512:
-                    conexao.enviar(resposta + b'\r\n')
-                    resposta = prefixo + apelido
-                elif resposta == prefixo:
-                    resposta += apelido
-                else:
-                    resposta += b' ' + apelido
-            if resposta != prefixo:
-                conexao.enviar(resposta + b'\r\n')
-
-            resposta = b':server 366 ' + (conexao.apelido if conexao.apelido != b'' else b'*') + b' ' + chan_name + b' :End of /NAMES list.' + b'\r\n'
-            conexao.enviar(resposta)
 
     def handle_part(conexao: Conexao, linha: bytes):
-        chan_name = Utils.parse_cmd(linha)
-        chan_name = chan_name.lstrip(b'#')
-        chan_name_str = chan_name.decode('utf-8')
+        raw = Utils.parse_cmd(linha) 
+        chan = raw.split(b' ', 1)[0]    
+        key  = chan.upper() 
 
-        if conexao not in canais.get(chan_name_str.upper(), []):
+        if key not in canais or conexao not in canais[key]:
             return
 
-        canais.setdefault(chan_name_str.upper(), []).remove(conexao)
-        conexao.enviar(b':' + (conexao.apelido if conexao.apelido != b'' else b'*') + b' PART ' + chan_name + b'\r\n')
-        for c in canais[chan_name_str.upper()]:
-            c.enviar(b':' + (conexao.apelido if conexao.apelido != b'' else b'*') + b' PART ' + chan_name + b'\r\n')
+        msg = b':' + conexao.apelido + b' PART ' + chan + b'\r\n'
+
+        members = list(canais[key])
+        for c in members:
+            c.enviar(msg)
+
+        canais[key].remove(conexao)
 
     def handle_default(conexao, linha: bytes):
         print(conexao, linha)
@@ -165,18 +158,26 @@ class IRCServer:
 
     def sair(self, conexao: Conexao):
         print(f"[Desconexão] {conexao} fechou")
-
         nick = conexao.apelido or b'*'
-        for key, members in list(canais.items()):
+        key_nick = nick.upper()
+
+        if key_nick in apelidos:
+            del apelidos[key_nick]
+
+        destinatarios = set()
+        for members in canais.values():
             if conexao in members:
-                
                 for c in members:
-                    if c != conexao:
-                        c.enviar(b':' + nick + b' QUIT :Client Quit\r\n')
-                
+                    if c is not conexao:
+                        destinatarios.add(c)
                 members.remove(conexao)
-        
+
+        quit_msg = b':' + nick + b' QUIT :Client Quit\r\n'
+        for c in destinatarios:
+            c.enviar(quit_msg)
+
         conexao.fechar()
+
 
 if __name__ == "__main__":
     IRCServer(porta=6667).start()
