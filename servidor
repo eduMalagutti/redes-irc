@@ -88,6 +88,26 @@ class Handler:
             for c in canais[chan_name_str.upper()]:
                 c.enviar(b':' + (conexao.apelido if conexao.apelido != b'' else b'*') + b' JOIN ' + chan_name + b'\r\n')
 
+            canal = canais[chan_name_str.upper()]
+            apelidos = sorted([
+                (c.apelido if c.apelido else b'*') for c in canal
+            ], key=lambda x: (x == b'*', x.lower()))
+            prefixo =  b':server 353 ' + (conexao.apelido if conexao.apelido != b'' else b'*') + b' = ' + chan_name + b' :'
+            resposta = prefixo
+            for apelido in apelidos:
+                if len(resposta) + len(apelido) + 1 + len(b'\r\n') > 512:
+                    conexao.enviar(resposta + b'\r\n')
+                    resposta = prefixo + apelido
+                elif resposta == prefixo:
+                    resposta += apelido
+                else:
+                    resposta += b' ' + apelido
+            if resposta != prefixo:
+                conexao.enviar(resposta + b'\r\n')
+
+            resposta = b':server 366 ' + (conexao.apelido if conexao.apelido != b'' else b'*') + b' ' + chan_name + b' :End of /NAMES list.' + b'\r\n'
+            conexao.enviar(resposta)
+
     def handle_part(conexao: Conexao, linha: bytes):
         chan_name = Utils.parse_cmd(linha)
         chan_name = chan_name.lstrip(b'#')
