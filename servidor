@@ -92,15 +92,17 @@ class Handler:
         chan_name = Utils.parse_cmd(linha)
         chan_name = chan_name.lstrip(b'#')
         chan_name_str = chan_name.decode('utf-8')
+
+        if conexao not in canais.get(chan_name_str.upper(), []):
+            return
+
         canais.setdefault(chan_name_str.upper(), []).remove(conexao)
-        
         conexao.enviar(b':' + (conexao.apelido if conexao.apelido != b'' else b'*') + b' PART ' + chan_name + b'\r\n')
         for c in canais[chan_name_str.upper()]:
             c.enviar(b':' + (conexao.apelido if conexao.apelido != b'' else b'*') + b' PART ' + chan_name + b'\r\n')
 
     def handle_default(conexao, linha: bytes):
         print(conexao, linha)
-
 
 class IRCServer:
     def __init__(self, porta: int = 6667):
